@@ -12,6 +12,8 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Base64
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -27,6 +29,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -37,6 +41,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresPermission
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +66,7 @@ import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -91,7 +97,13 @@ fun MainScreen(modifier: Modifier = Modifier) {
             ) == PackageManager.PERMISSION_GRANTED
         )
     }
-    val httpClient = remember { OkHttpClient() }
+    val httpClient = remember { 
+        OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .build()
+    }
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -104,6 +116,8 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var isListening by remember { mutableStateOf(false) }
     var useCloud by remember { mutableStateOf(true) }
     val apiKey = BuildConfig.GCP_API_KEY
+    var aiResponse by remember { mutableStateOf("") }
+    var aiLoading by remember { mutableStateOf(false) }
 
     Column(modifier = modifier.padding(16.dp)) {
         androidx.compose.foundation.layout.Row(
@@ -166,16 +180,49 @@ fun MainScreen(modifier: Modifier = Modifier) {
         ) {
             Button(
                 onClick = {
-                    Toast.makeText(context, "Answer: ${'$'}textValue", Toast.LENGTH_SHORT).show()
+                    val prompt = (listOf(textValue, partialText).filter { it.isNotBlank() }).joinToString(" ")
+                    if (prompt.isBlank()) {
+                        Toast.makeText(context, "Enter or speak something first", Toast.LENGTH_SHORT).show()
+                    } else {
+                        aiLoading = true
+                        aiResponse = ""
+                        callGemini(
+                            httpClient = httpClient,
+                            apiKey = apiKey,
+                            prompt = prompt,
+                            onSuccess = { answer ->
+                                aiLoading = false
+                                aiResponse = answer
+                            },
+                            onError = { err ->
+                                aiLoading = false
+                                aiResponse = "Error: $err"
+                            }
+                        )
+                    }
                 }
             ) {
-                Text("Answar")
+                Text(if (aiLoading) "Thinking…" else "Answar")
             }
 
             Button(
-                onClick = { textValue = "" }
+                onClick = { textValue = ""; partialText = ""; aiResponse = "" }
             ) {
                 Text("clean edit test")
+            }
+        }
+
+        if (aiResponse.isNotBlank()) {
+            Spacer(modifier = Modifier.height(12.dp))
+            val scrollState = rememberScrollState()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight()
+                    .verticalScroll(scrollState)
+                    .padding(8.dp)
+            ) {
+                Text(aiResponse)
             }
         }
     }
@@ -240,13 +287,20 @@ private fun startCloudMic(
                 val mediaType = "application/json; charset=utf-8".toMediaType()
                 val body: RequestBody = reqJson.toString().toRequestBody(mediaType)
                 val request = Request.Builder()
-                    .url("https://speech.googleapis.com/v1/speech:recognize?key=$apiKey")
+                    .url("https://speech.googleapis.com/v1/speech:recognize")
+                    .addHeader("x-goog-api-key", apiKey)
                     .post(body)
                     .build()
                 try {
                     httpClient.newCall(request).execute().use { resp ->
-                        if (!resp.isSuccessful) return@use
+                        if (!resp.isSuccessful) {
+                            // Log STT error for debugging
+                            val errBody = resp.body?.string().orEmpty()
+                            android.util.Log.e("STT", "HTTP ${resp.code}: $errBody")
+                            return@use
+                        }
                         val respStr = resp.body?.string().orEmpty()
+                        android.util.Log.d("STT", "Response: $respStr")
                         val root = JSONObject(respStr)
                         val results = root.optJSONArray("results")
                         if (results != null && results.length() > 0) {
@@ -254,12 +308,15 @@ private fun startCloudMic(
                             val alts = first.optJSONArray("alternatives")
                             if (alts != null && alts.length() > 0) {
                                 val transcript = alts.getJSONObject(0).optString("transcript")
-                                if (transcript.isNotBlank()) onFinal(transcript)
+                                if (transcript.isNotBlank()) {
+                                    android.util.Log.d("STT", "Transcript: $transcript")
+                                    onFinal(transcript)
+                                }
                             }
                         }
                     }
-                } catch (_: Exception) {
-                    // ignore errors for now
+                } catch (e: Exception) {
+                    android.util.Log.e("STT", "Request failed", e)
                 }
                 onPartial("")
             }
@@ -278,6 +335,97 @@ private fun stopCloudMic() {
     try { cloudRecorder?.stop() } catch (_: Exception) {}
     try { cloudRecorder?.release() } catch (_: Exception) {}
     cloudRecorder = null
+}
+
+private fun callGemini(
+    httpClient: OkHttpClient,
+    apiKey: String,
+    prompt: String,
+    onSuccess: (String) -> Unit,
+    onError: (String) -> Unit
+) {
+    val mediaType = "application/json; charset=utf-8".toMediaType()
+    val reqJson = JSONObject().apply {
+        put("contents", org.json.JSONArray().apply {
+            put(JSONObject().apply {
+                put("parts", org.json.JSONArray().apply {
+                    put(JSONObject().apply { put("text", prompt) })
+                })
+            })
+        })
+    }
+    val body: RequestBody = reqJson.toString().toRequestBody(mediaType)
+    val request = Request.Builder()
+        .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
+        .addHeader("x-goog-api-key", apiKey)
+        .post(body)
+        .build()
+    val mainHandler = Handler(Looper.getMainLooper())
+    httpClient.newCall(request).enqueue(object : okhttp3.Callback {
+        override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+            mainHandler.post { onError(e.message ?: "request failed") }
+        }
+        override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+            response.use {
+                if (!response.isSuccessful) {
+                    val errBody = response.body?.string().orEmpty()
+                    var msg = "HTTP ${response.code}"
+                    try {
+                        val errJson = JSONObject(errBody).optJSONObject("error")
+                        val emsg = errJson?.optString("message").orEmpty()
+                        if (emsg.isNotBlank()) msg = "$msg: $emsg"
+                    } catch (_: Throwable) {}
+                    mainHandler.post { onError(msg) }
+                    return
+                }
+                
+                // Parse Server-Sent Events stream
+                val responseBody = response.body?.source()
+                var accumulatedAnswer = ""
+                
+                try {
+                    while (!responseBody?.exhausted()!!) {
+                        val line = responseBody.readUtf8Line()
+                        if (line == null) break
+                        
+                        android.util.Log.d("Gemini", "SSE Line: $line")
+                        
+                        if (line.startsWith("data: ")) {
+                            val jsonData = line.substring(6).trim()
+                            if (jsonData == "[DONE]") break
+                            if (jsonData.isEmpty()) continue
+                            
+                            try {
+                                android.util.Log.d("Gemini", "JSON chunk: $jsonData")
+                                val chunk = JSONObject(jsonData)
+                                val candidates = chunk.optJSONArray("candidates")
+                                if (candidates != null && candidates.length() > 0) {
+                                    val content = candidates.getJSONObject(0).optJSONObject("content")
+                                    val parts = content?.optJSONArray("parts")
+                                    val text = parts?.optJSONObject(0)?.optString("text").orEmpty()
+                                    if (text.isNotBlank()) {
+                                        accumulatedAnswer += text
+                                        android.util.Log.d("Gemini", "Accumulated: $accumulatedAnswer")
+                                        mainHandler.post { onSuccess(accumulatedAnswer) }
+                                    }
+                                }
+                            } catch (e: Throwable) {
+                                android.util.Log.e("Gemini", "JSON parse error: ${e.message}")
+                            }
+                        }
+                    }
+                } catch (t: Throwable) {
+                    android.util.Log.e("Gemini", "Stream parse error: ${t.message}")
+                    mainHandler.post { onError("stream parse error: ${t.message}") }
+                }
+                
+                if (accumulatedAnswer.isBlank()) {
+                    android.util.Log.w("Gemini", "No content received")
+                    mainHandler.post { onSuccess("(no answer)") }
+                }
+            }
+        }
+    })
 }
 
 @Composable
