@@ -355,7 +355,7 @@ private fun callGemini(
             })
         })
         put("generationConfig", JSONObject().apply {
-            put("maxOutputTokens", 128)
+            put("maxOutputTokens", 1024)
             // thinkingConfig is supported on 2.5 models; set budget 0 to prefer speed
             put("thinkingConfig", JSONObject().apply { put("thinkingBudget", 0) })
         })
