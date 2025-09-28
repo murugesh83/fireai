@@ -8,9 +8,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -35,6 +36,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.foundation.BorderStroke
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresPermission
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +57,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.foundation.shape.CircleShape
 import androidx.core.content.ContextCompat
 import com.smartshare.transfer.fireai.ui.theme.FireAITheme
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -87,6 +96,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
         )
     }
     var screenGranted by remember { mutableStateOf(false) }
+    val httpClient = remember { OkHttpClient() }
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -103,75 +113,9 @@ fun MainScreen(modifier: Modifier = Modifier) {
         screenGranted = result.resultCode == Activity.RESULT_OK
     }
 
-    // Speech recognizer setup
-    val speechRecognizer = remember { SpeechRecognizer.createSpeechRecognizer(context) }
-    val listenIntent = remember {
-        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-            )
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 60000)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4000)
-        }
-    }
     var isListening by remember { mutableStateOf(false) }
-
-    DisposableEffect(Unit) {
-        speechRecognizer.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-            override fun onError(error: Int) {
-                if (isListening) {
-                    speechRecognizer.cancel()
-                    speechRecognizer.startListening(listenIntent)
-                }
-            }
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                if (!matches.isNullOrEmpty()) {
-                    val best = matches.first()
-                    textValue = (listOf(textValue, best).filter { it.isNotBlank() }).joinToString(" ")
-                    partialText = ""
-                }
-                if (isListening) {
-                    speechRecognizer.startListening(listenIntent)
-                }
-            }
-            override fun onPartialResults(partialResults: Bundle?) {
-                val partials = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                if (!partials.isNullOrEmpty()) {
-                    partialText = partials.first()
-                }
-            }
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
-        onDispose {
-            isListening = false
-            speechRecognizer.stopListening()
-            speechRecognizer.cancel()
-            speechRecognizer.destroy()
-        }
-    }
-
-    // Auto manage listening for mic modes
-    androidx.compose.runtime.LaunchedEffect(selectedAudio, micGranted) {
-        val needsMic = selectedAudio == "mic" || selectedAudio == "both"
-        if (needsMic && micGranted && !isListening) {
-            isListening = true
-            speechRecognizer.startListening(listenIntent)
-        }
-        if (!needsMic && isListening) {
-            isListening = false
-            speechRecognizer.stopListening()
-        }
-    }
+    var useCloud by remember { mutableStateOf(true) }
+    val apiKey = BuildConfig.GCP_API_KEY
 
     Column(modifier = modifier.padding(16.dp)) {
         androidx.compose.foundation.layout.Row(
@@ -197,16 +141,19 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 selected = selectedAudio == "both",
                 onClick = { selectedAudio = "both" }
             )
-            // Mic listening toggle when mic-related modes selected
+            // Mic listening toggle (Cloud only)
             Button(onClick = {
                 if ((selectedAudio == "mic" || selectedAudio == "both") && micGranted) {
-                    if (isListening) {
-                        isListening = false
-                        speechRecognizer.stopListening()
-                    } else {
-                        isListening = true
-                        speechRecognizer.startListening(listenIntent)
-                    }
+                    if (isListening) stopCloudMic() else startCloudMic(
+                        httpClient = httpClient,
+                        apiKey = apiKey,
+                        onPartial = { partial -> partialText = partial },
+                        onFinal = { final ->
+                            textValue = (listOf(textValue, final).filter { it.isNotBlank() }).joinToString(" ")
+                            partialText = ""
+                        }
+                    )
+                    isListening = !isListening
                 } else {
                     Toast.makeText(context, "Microphone permission required", Toast.LENGTH_SHORT).show()
                 }
@@ -276,6 +223,105 @@ fun MainScreen(modifier: Modifier = Modifier) {
             }
         }
     }
+}
+
+// --- Simple Google Cloud STT mic capture using short non-streaming requests ---
+private var cloudThread: Thread? = null
+private var cloudRun = AtomicBoolean(false)
+private var cloudRecorder: AudioRecord? = null
+
+@RequiresPermission(Manifest.permission.RECORD_AUDIO)
+private fun startCloudMic(
+    httpClient: OkHttpClient,
+    apiKey: String,
+    onPartial: (String) -> Unit,
+    onFinal: (String) -> Unit
+) {
+    if (cloudThread != null) return
+    val sampleRate = 16000
+    val minBuf = AudioRecord.getMinBufferSize(
+        sampleRate,
+        AudioFormat.CHANNEL_IN_MONO,
+        AudioFormat.ENCODING_PCM_16BIT
+    )
+    val bufferSize = maxOf(minBuf, sampleRate /* 1 sec */ * 2)
+    val recorder = AudioRecord(
+        MediaRecorder.AudioSource.MIC,
+        sampleRate,
+        AudioFormat.CHANNEL_IN_MONO,
+        AudioFormat.ENCODING_PCM_16BIT,
+        bufferSize
+    )
+    cloudRecorder = recorder
+    cloudRun.set(true)
+    recorder.startRecording()
+    cloudThread = Thread {
+        try {
+            val chunkMs = 2000
+            val bytesPerSec = sampleRate * 2
+            val targetBytes = bytesPerSec * chunkMs / 1000
+            val readBuffer = ByteArray(targetBytes)
+            while (cloudRun.get()) {
+                var readTotal = 0
+                while (readTotal < targetBytes && cloudRun.get()) {
+                    val r = recorder.read(readBuffer, readTotal, targetBytes - readTotal)
+                    if (r > 0) readTotal += r else Thread.sleep(10)
+                }
+                if (!cloudRun.get()) break
+                onPartial("…")
+                val contentB64 = Base64.encodeToString(readBuffer, 0, readTotal, Base64.NO_WRAP)
+                val reqJson = JSONObject().apply {
+                    put("config", JSONObject().apply {
+                        put("encoding", "LINEAR16")
+                        put("sampleRateHertz", sampleRate)
+                        put("languageCode", "en-US")
+                        put("enableAutomaticPunctuation", true)
+                    })
+                    put("audio", JSONObject().apply {
+                        put("content", contentB64)
+                    })
+                }
+                val mediaType = "application/json; charset=utf-8".toMediaType()
+                val body: RequestBody = reqJson.toString().toRequestBody(mediaType)
+                val request = Request.Builder()
+                    .url("https://speech.googleapis.com/v1/speech:recognize?key=$apiKey")
+                    .post(body)
+                    .build()
+                try {
+                    httpClient.newCall(request).execute().use { resp ->
+                        if (!resp.isSuccessful) return@use
+                        val respStr = resp.body?.string().orEmpty()
+                        val root = JSONObject(respStr)
+                        val results = root.optJSONArray("results")
+                        if (results != null && results.length() > 0) {
+                            val first = results.getJSONObject(0)
+                            val alts = first.optJSONArray("alternatives")
+                            if (alts != null && alts.length() > 0) {
+                                val transcript = alts.getJSONObject(0).optString("transcript")
+                                if (transcript.isNotBlank()) onFinal(transcript)
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                    // ignore errors for now
+                }
+                onPartial("")
+            }
+        } finally {
+            try { recorder.stop() } catch (_: Exception) {}
+            try { recorder.release() } catch (_: Exception) {}
+            cloudRecorder = null
+        }
+    }.also { it.start() }
+}
+
+private fun stopCloudMic() {
+    cloudRun.set(false)
+    cloudThread?.join(500)
+    cloudThread = null
+    try { cloudRecorder?.stop() } catch (_: Exception) {}
+    try { cloudRecorder?.release() } catch (_: Exception) {}
+    cloudRecorder = null
 }
 
 @Composable

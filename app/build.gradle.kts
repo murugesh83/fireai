@@ -1,3 +1,4 @@
+import java.util.Properties
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -36,6 +37,23 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+
+    // Expose Google Cloud API key from local.properties as BuildConfig.GCP_API_KEY
+    val props = Properties()
+    val lp = rootProject.file("local.properties")
+    if (lp.exists()) {
+        lp.inputStream().use { props.load(it) }
+    }
+    val gcpKey = props.getProperty("GCP_API_KEY", "")
+    buildTypes {
+        debug {
+            buildConfigField("String", "GCP_API_KEY", "\"${gcpKey}\"")
+        }
+        release {
+            buildConfigField("String", "GCP_API_KEY", "\"${gcpKey}\"")
+        }
     }
 }
 
@@ -49,6 +67,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.material:material-icons-extended")
     testImplementation(libs.junit)
