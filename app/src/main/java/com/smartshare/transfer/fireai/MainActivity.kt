@@ -214,6 +214,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
 
         if (aiResponse.isNotBlank()) {
             Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.weight(1f))
             val scrollState = rememberScrollState()
             Box(
                 modifier = Modifier
