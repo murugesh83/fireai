@@ -353,10 +353,15 @@ private fun callGemini(
                 })
             })
         })
+        put("generationConfig", JSONObject().apply {
+            put("maxOutputTokens", 128)
+            // thinkingConfig is supported on 2.5 models; set budget 0 to prefer speed
+            put("thinkingConfig", JSONObject().apply { put("thinkingBudget", 0) })
+        })
     }
     val body: RequestBody = reqJson.toString().toRequestBody(mediaType)
     val request = Request.Builder()
-        .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
+        .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:streamGenerateContent?alt=sse")
         .addHeader("x-goog-api-key", apiKey)
         .post(body)
         .build()
