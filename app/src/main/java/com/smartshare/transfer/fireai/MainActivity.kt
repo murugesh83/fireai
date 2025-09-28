@@ -49,10 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.TextField
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
+// Removed icon-only options for system/both; cloud-only keeps UI simple
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.shape.CircleShape
 import androidx.core.content.ContextCompat
@@ -84,7 +81,6 @@ fun MainScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var textValue by remember { mutableStateOf("") } // committed transcript
     var partialText by remember { mutableStateOf("") } // live hypothesis
-    var selectedAudio by remember { mutableStateOf("system") }
 
     // Permissions state
     var micGranted by remember {
@@ -95,7 +91,6 @@ fun MainScreen(modifier: Modifier = Modifier) {
             ) == PackageManager.PERMISSION_GRANTED
         )
     }
-    var screenGranted by remember { mutableStateOf(false) }
     val httpClient = remember { OkHttpClient() }
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
@@ -104,14 +99,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
         micGranted = granted
     }
 
-    val mediaProjectionManager = remember {
-        context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-    }
-    val screenCaptureLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        screenGranted = result.resultCode == Activity.RESULT_OK
-    }
+    // Cloud-only: no screen capture
 
     var isListening by remember { mutableStateOf(false) }
     var useCloud by remember { mutableStateOf(true) }
@@ -120,30 +108,11 @@ fun MainScreen(modifier: Modifier = Modifier) {
     Column(modifier = modifier.padding(16.dp)) {
         androidx.compose.foundation.layout.Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.Start,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            AudioOptionIcon(
-                icon = Icons.AutoMirrored.Filled.VolumeUp,
-                contentDesc = "System audio",
-                selected = selectedAudio == "system",
-                onClick = { selectedAudio = "system" }
-            )
-            AudioOptionIcon(
-                icon = Icons.Filled.Mic,
-                contentDesc = "Micro phone",
-                selected = selectedAudio == "mic",
-                onClick = { selectedAudio = "mic" }
-            )
-            AudioOptionIcon(
-                icon = Icons.Filled.GraphicEq,
-                contentDesc = "System/Micro Audio",
-                selected = selectedAudio == "both",
-                onClick = { selectedAudio = "both" }
-            )
-            // Mic listening toggle (Cloud only)
             Button(onClick = {
-                if ((selectedAudio == "mic" || selectedAudio == "both") && micGranted) {
+                if (micGranted) {
                     if (isListening) stopCloudMic() else startCloudMic(
                         httpClient = httpClient,
                         apiKey = apiKey,
@@ -160,33 +129,20 @@ fun MainScreen(modifier: Modifier = Modifier) {
             }) { Text(if (isListening) "Stop" else "Listen") }
         }
 
-        // Permission requirement notice and grant buttons based on selection
-        val needsMic = selectedAudio == "mic" || selectedAudio == "both"
-        val needsScreen = selectedAudio == "system" || selectedAudio == "both"
-        val missingPermission = (needsMic && !micGranted) || (needsScreen && !screenGranted)
-
-        if (missingPermission) {
+        // Mic permission notice (cloud-only)
+        if (!micGranted) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = if (needsScreen && !screenGranted && !needsMic) {
-                    "System audio transcription isn't supported by built-in recognizer"
-                } else "Permission required to continue",
+                text = "Permission required to continue",
                 color = MaterialTheme.colorScheme.error
             )
             Spacer(modifier = Modifier.height(4.dp))
             androidx.compose.foundation.layout.Row(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                if (needsMic && !micGranted) {
-                    Button(onClick = {
-                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    }) { Text("Grant mic") }
-                }
-                if (needsScreen && !screenGranted) {
-                    Button(onClick = {
-                        screenCaptureLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
-                    }) { Text("Grant system") }
-                }
+                Button(onClick = {
+                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }) { Text("Grant mic") }
             }
         }
 
