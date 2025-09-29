@@ -34,8 +34,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
 import com.smartshare.transfer.fireai.data.CloudSttRecorder
 import com.smartshare.transfer.fireai.data.GeminiClient
@@ -53,6 +56,9 @@ fun MainScreen(
     var aiResponse by remember { mutableStateOf("") }
     var aiLoading by remember { mutableStateOf(false) }
     var isListening by remember { mutableStateOf(false) }
+
+    // TextFieldValue to control caret and auto-scroll to end
+    var inputField by remember { mutableStateOf(TextFieldValue("")) }
 
     Column(
         modifier = Modifier
@@ -82,10 +88,20 @@ fun MainScreen(
             }
         }
 
-        // Input just above the buttons
+        // Compute combined input and push caret to end
+        val combinedInput = listOf(textValue, partialText).filter { it.isNotBlank() }.joinToString(" ")
+        LaunchedEffect(combinedInput) {
+            inputField = TextFieldValue(combinedInput, selection = TextRange(combinedInput.length))
+        }
+
+        // Input just above the buttons (fixed 3-line height with internal scroll)
         OutlinedTextField(
-            value = listOf(textValue, partialText).filter { it.isNotBlank() }.joinToString(" "),
-            onValueChange = { textValue = it },
+            value = inputField,
+            onValueChange = {
+                inputField = it
+                textValue = it.text
+                partialText = ""
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 12.dp),
@@ -110,7 +126,9 @@ fun MainScreen(
                             recorder.stop()
                             isListening = false
                         } else {
-                            startListening(recorder, onPartial = { partialText = it }) { final ->
+                            startListening(recorder, onPartial = { partial ->
+                                partialText = partial
+                            }) { final ->
                                 textValue = listOf(textValue, final).filter { it.isNotBlank() }.joinToString(" ")
                                 partialText = ""
                             }
@@ -130,7 +148,7 @@ fun MainScreen(
 
             FilledTonalButton(
                 onClick = {
-                    val prompt = listOf(textValue, partialText).filter { it.isNotBlank() }.joinToString(" ")
+                    val prompt = combinedInput
                     if (prompt.isBlank()) {
                         Toast.makeText(context, "Enter or speak something first", Toast.LENGTH_SHORT).show()
                     } else {
@@ -158,7 +176,12 @@ fun MainScreen(
             }
 
             FilledTonalButton(
-                onClick = { textValue = ""; partialText = ""; aiResponse = "" },
+                onClick = {
+                    textValue = ""
+                    partialText = ""
+                    inputField = TextFieldValue("")
+                    aiResponse = ""
+                },
                 shape = RoundedCornerShape(24.dp),
                 colors = ButtonDefaults.filledTonalButtonColors()
             ) {
