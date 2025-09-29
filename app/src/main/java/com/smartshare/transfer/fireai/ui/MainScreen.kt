@@ -57,19 +57,18 @@ fun MainScreen(
     var isListening by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Content column with bottom padding so it stays above buttons
+        // Top answer area
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
                 .padding(start = 16.dp, end = 16.dp, top = 16.dp)
-                .navigationBarsPadding()
-                .padding(bottom = 96.dp)
         ) {
             val scrollState = rememberScrollState()
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.7f)
+                    .fillMaxHeight(0.6f)
                     .verticalScroll(scrollState),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
@@ -84,99 +83,97 @@ fun MainScreen(
                     }
                 }
             }
+        }
 
+        // Bottom input + buttons stack
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+        ) {
             OutlinedTextField(
                 value = listOf(textValue, partialText).filter { it.isNotBlank() }.joinToString(" "),
                 onValueChange = { textValue = it },
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp),
+                    .fillMaxWidth(),
                 minLines = 3,
                 maxLines = 3,
                 placeholder = { Text("Enter text") },
                 leadingIcon = { Icon(imageVector = Icons.Outlined.Mic, contentDescription = null) },
                 shape = RoundedCornerShape(16.dp)
             )
-        }
 
-        // Bottom buttons aligned to bottom center
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            FilledTonalButton(
-                onClick = {
-                    if (micGranted) {
-                        if (isListening) {
-                            recorder.stop()
-                            isListening = false
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                FilledTonalButton(
+                    onClick = {
+                        if (micGranted) {
+                            if (isListening) {
+                                recorder.stop()
+                                isListening = false
+                            } else {
+                                startListening(recorder, onPartial = { partialText = it }) { final ->
+                                    textValue = listOf(textValue, final).filter { it.isNotBlank() }.joinToString(" ")
+                                    partialText = ""
+                                }
+                                isListening = true
+                            }
                         } else {
-                            startListening(recorder, onPartial = { partialText = it }) { final ->
-                                textValue = listOf(textValue, final).filter { it.isNotBlank() }.joinToString(" ")
-                                partialText = ""
-                            }
-                            isListening = true
+                            Toast.makeText(context, "Microphone permission required", Toast.LENGTH_SHORT).show()
                         }
-                    } else {
-                        Toast.makeText(context, "Microphone permission required", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                shape = RoundedCornerShape(24.dp),
-                colors = ButtonDefaults.filledTonalButtonColors()
-            ) {
-                Icon(Icons.Outlined.Mic, contentDescription = null)
-                Spacer(modifier = Modifier.padding(horizontal = 4.dp))
-                Text(if (isListening) "Stop" else "Listen")
-            }
+                    },
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.filledTonalButtonColors()
+                ) {
+                    Icon(Icons.Outlined.Mic, contentDescription = null)
+                    Spacer(modifier = Modifier.padding(horizontal = 4.dp))
+                    Text(if (isListening) "Stop" else "Listen")
+                }
 
-            FilledTonalButton(
-                onClick = {
-                    val prompt = listOf(textValue, partialText).filter { it.isNotBlank() }.joinToString(" ")
-                    if (prompt.isBlank()) {
-                        Toast.makeText(context, "Enter or speak something first", Toast.LENGTH_SHORT).show()
-                    } else {
-                        aiLoading = true
-                        aiResponse = ""
-                        gemini.streamAnswer(
-                            prompt = prompt,
-                            onChunk = {
-                                aiLoading = false
-                                aiResponse = it
-                            },
-                            onError = {
-                                aiLoading = false
-                                aiResponse = "Error: $it"
-                            }
-                        )
-                    }
-                },
-                shape = RoundedCornerShape(24.dp),
-                colors = ButtonDefaults.filledTonalButtonColors()
-            ) {
-                Icon(Icons.Outlined.Send, contentDescription = null)
-                Spacer(modifier = Modifier.padding(horizontal = 4.dp))
-                Text(if (aiLoading) "Thinking…" else "Answar")
-            }
+                FilledTonalButton(
+                    onClick = {
+                        val prompt = listOf(textValue, partialText).filter { it.isNotBlank() }.joinToString(" ")
+                        if (prompt.isBlank()) {
+                            Toast.makeText(context, "Enter or speak something first", Toast.LENGTH_SHORT).show()
+                        } else {
+                            aiLoading = true
+                            aiResponse = ""
+                            gemini.streamAnswer(
+                                prompt = prompt,
+                                onChunk = {
+                                    aiLoading = false
+                                    aiResponse = it
+                                },
+                                onError = {
+                                    aiLoading = false
+                                    aiResponse = "Error: $it"
+                                }
+                            )
+                        }
+                    },
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.filledTonalButtonColors()
+                ) {
+                    Icon(Icons.Outlined.Send, contentDescription = null)
+                    Spacer(modifier = Modifier.padding(horizontal = 4.dp))
+                    Text(if (aiLoading) "Thinking…" else "Answar")
+                }
 
-            FilledTonalButton(
-                onClick = { textValue = ""; partialText = ""; aiResponse = "" },
-                shape = RoundedCornerShape(24.dp),
-                colors = ButtonDefaults.filledTonalButtonColors()
-            ) {
-                Icon(Icons.Outlined.Delete, contentDescription = null)
-                Spacer(modifier = Modifier.padding(horizontal = 4.dp))
-                Text("Clear")
-            }
-        }
-
-        if (!micGranted) {
-            Column(modifier = Modifier.align(Alignment.BottomStart).padding(bottom = 56.dp)) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(text = "Permission required to continue", color = MaterialTheme.colorScheme.error)
+                FilledTonalButton(
+                    onClick = { textValue = ""; partialText = ""; aiResponse = "" },
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.filledTonalButtonColors()
+                ) {
+                    Icon(Icons.Outlined.Delete, contentDescription = null)
+                    Spacer(modifier = Modifier.padding(horizontal = 4.dp))
+                    Text("Clear")
+                }
             }
         }
     }
