@@ -12,14 +12,24 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Send
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,26 +63,39 @@ fun MainScreen(
                 .fillMaxSize()
                 .padding(start = 16.dp, end = 16.dp, top = 16.dp)
                 .navigationBarsPadding()
-                .padding(bottom = 0.dp)
+                .padding(bottom = 96.dp)
         ) {
             val scrollState = rememberScrollState()
-            Box(
+            Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.75f)
-                    .verticalScroll(scrollState)
-                    .padding(16.dp)
-            ) { if (aiResponse.isNotBlank()) Text(aiResponse) }
+                    .fillMaxHeight(0.7f)
+                    .verticalScroll(scrollState),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Box(modifier = Modifier.padding(16.dp)) {
+                    if (aiResponse.isNotBlank()) {
+                        SelectionContainer { Text(aiResponse, style = MaterialTheme.typography.bodyLarge) }
+                    } else {
+                        Text("Answer will appear here…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
 
-            TextField(
+            OutlinedTextField(
                 value = listOf(textValue, partialText).filter { it.isNotBlank() }.joinToString(" "),
                 onValueChange = { textValue = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 8.dp, bottom = 0.dp),
+                    .padding(top = 12.dp),
                 minLines = 3,
                 maxLines = 3,
-                label = { Text("Enter text") }
+                placeholder = { Text("Enter text") },
+                leadingIcon = { Icon(imageVector = Icons.Outlined.Mic, contentDescription = null) },
+                shape = RoundedCornerShape(16.dp)
             )
         }
 
@@ -82,48 +105,70 @@ fun MainScreen(
                 .fillMaxWidth()
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(start = 16.dp, end = 16.dp, top = 24.dp),
+                .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Button(onClick = {
-                if (micGranted) {
-                    if (isListening) {
-                        recorder.stop()
-                        isListening = false
+            FilledTonalButton(
+                onClick = {
+                    if (micGranted) {
+                        if (isListening) {
+                            recorder.stop()
+                            isListening = false
+                        } else {
+                            startListening(recorder, onPartial = { partialText = it }) { final ->
+                                textValue = listOf(textValue, final).filter { it.isNotBlank() }.joinToString(" ")
+                                partialText = ""
+                            }
+                            isListening = true
+                        }
                     } else {
-                        startListening(recorder, onPartial = { partialText = it }) { final ->
-                            textValue = listOf(textValue, final).filter { it.isNotBlank() }.joinToString(" ")
-                            partialText = ""
-                        }
-                        isListening = true
+                        Toast.makeText(context, "Microphone permission required", Toast.LENGTH_SHORT).show()
                     }
-                } else {
-                    Toast.makeText(context, "Microphone permission required", Toast.LENGTH_SHORT).show()
-                }
-            }) { Text(if (isListening) "Stop" else "Listen") }
+                },
+                shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.filledTonalButtonColors()
+            ) {
+                Icon(Icons.Outlined.Mic, contentDescription = null)
+                Spacer(modifier = Modifier.padding(horizontal = 4.dp))
+                Text(if (isListening) "Stop" else "Listen")
+            }
 
-            Button(onClick = {
-                val prompt = listOf(textValue, partialText).filter { it.isNotBlank() }.joinToString(" ")
-                if (prompt.isBlank()) {
-                    Toast.makeText(context, "Enter or speak something first", Toast.LENGTH_SHORT).show()
-                } else {
-                    aiLoading = true
-                    aiResponse = ""
-                    gemini.streamAnswer(
-                        prompt = prompt,
-                        onChunk = {
-                            aiLoading = false
-                            aiResponse = it
-                        },
-                        onError = {
-                            aiLoading = false
-                            aiResponse = "Error: $it"
-                        }
-                    )
-                }
-            }) { Text(if (aiLoading) "Thinking…" else "Answar") }
+            FilledTonalButton(
+                onClick = {
+                    val prompt = listOf(textValue, partialText).filter { it.isNotBlank() }.joinToString(" ")
+                    if (prompt.isBlank()) {
+                        Toast.makeText(context, "Enter or speak something first", Toast.LENGTH_SHORT).show()
+                    } else {
+                        aiLoading = true
+                        aiResponse = ""
+                        gemini.streamAnswer(
+                            prompt = prompt,
+                            onChunk = {
+                                aiLoading = false
+                                aiResponse = it
+                            },
+                            onError = {
+                                aiLoading = false
+                                aiResponse = "Error: $it"
+                            }
+                        )
+                    }
+                },
+                shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.filledTonalButtonColors()
+            ) {
+                Icon(Icons.Outlined.Send, contentDescription = null)
+                Spacer(modifier = Modifier.padding(horizontal = 4.dp))
+                Text(if (aiLoading) "Thinking…" else "Answar")
+            }
 
-            Button(onClick = { textValue = ""; partialText = ""; aiResponse = "" }) {
+            FilledTonalButton(
+                onClick = { textValue = ""; partialText = ""; aiResponse = "" },
+                shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.filledTonalButtonColors()
+            ) {
+                Icon(Icons.Outlined.Delete, contentDescription = null)
+                Spacer(modifier = Modifier.padding(horizontal = 4.dp))
                 Text("Clear")
             }
         }
